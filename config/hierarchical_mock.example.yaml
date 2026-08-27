@@ -1,0 +1,29 @@
+policy:
+  kind: rule
+  seed: 42
+
+operators:
+  - Plan
+  - Generate
+  - Review
+  - Revise
+  - Test
+  - Stop
+
+budget:
+  max_steps: 8
+  max_operator_calls: 8
+  token_budget: 2000
+  cost_budget: 10.0
+
+reward:
+  success_reward: 1.0
+  failure_reward: 0.0
+  progress_weight: 0.0
+
+credit:
+  method: progress_delta
+  discount_factor: 0.95
+
+trajectory_output: runs/mock.jsonl
+
