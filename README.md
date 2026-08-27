@@ -1,131 +1,257 @@
 # RS-AF
 
-Research Scaffold for Hierarchical Policy Optimization and Long-Horizon Credit
-Assignment, built additively on AFlow's agentic workflow generation baseline.
+**A CPU-first research scaffold for hierarchical policy optimization and
+long-horizon credit assignment in LLM agents.**
 
-## Upstream: AFlow — Automating Agentic Workflow Generation
+RS-AF extends the AFlow codebase with a typed, testable runtime for dynamic
+agent workflows. A high-level controller chooses macro actions while a frozen
+or mocked low-level executor performs them. The current stage focuses on
+interfaces, reproducible rollouts, structured trajectories, verifier signals,
+budget enforcement, and credit-assignment baselines—not full PPO/GRPO training.
 
-[![Arxiv](https://img.shields.io/badge/arXiv-AFlow-b31b1b)](https://arxiv.org/abs/2410.10762)
-[![PR Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](https://github.com/FoundationAgents/AFlow/pulls)
+> Current status: deterministic CPU mock environment, 31 unit/integration
+> tests, no GPU, model download, external API, or private environment variable
+> required.
 
-> If you encounter any difficulties in using or reproducing the code, please contact me directly (Email: didi4goooogle@gmail.com, Wechat: 18831933368). Some Operators may have bugs during the migration from MetaGPT to this repository.
+## Research Scope
 
+RS-AF studies **Hierarchical Policy Optimization for Long-Horizon LLM Agents**.
 
-AFlow is a framework for automatically generating and optimizing Agentic Workflows. It uses Monte Carlo tree search in a code-represented workflow space to find effective workflows, replacing manual development with machine effort. Our approach shows potential to outperform handcrafted workflows on various tasks. 
+The system has two levels:
 
-We're building it to support more benchmarks and open-ended tasks! If you have any questions, please open an issue or email us!
+1. **High-Level Workflow Controller** — selects the next macro action from
+   operators such as Plan, Generate, Review, Revise, Test, Tool, Ensemble, and
+   Stop.
+2. **Low-Level Executor** — executes the selected operator. It is frozen or
+   deterministic in the current stage and can later be connected to an LLM.
 
-## Hierarchical Agentic RL Research Scaffold
+The central algorithmic question is how to assign terminal and intermediate
+feedback to high-level decisions across long, branching trajectories.
 
-This repository also contains an additive, CPU-only scaffold for hierarchical
-policy rollouts and long-horizon credit assignment. It does not require an LLM,
-GPU, API key, or dataset download:
+## Architecture
 
-```bash
-python -m agentic_rl.examples.run_mock_rollout \
-  --policy rule --credit-method progress_delta --seed 42 \
-  --output runs/mock.jsonl
+```mermaid
+flowchart TD
+    Task --> State[AgentState]
+    State --> Policy[High-Level Policy]
+    Policy --> Action[MacroAction]
+    Action --> Executor[Operator / Frozen Executor]
+    Executor --> Observation[OperatorResult]
+    Observation --> Update[State Update]
+    Update --> Verifier
+    Verifier --> Trajectory
+    Budget[BudgetManager] --> State
+    Observation --> Budget
+    Trajectory --> Reward[RewardFunction]
+    Reward --> Credit[CreditAssigner]
+    Credit --> Optimizer[Future PolicyOptimizer]
 ```
 
-See [the architecture guide](docs/hierarchical_policy_optimization.md) for the
-state/action interfaces, trajectory schema, AFlow adapters, credit baselines,
-and future PPO/GRPO extension points. The original AFlow optimizer and entry
-points remain unchanged.
+The high-level policy never owns the environment or executor. Runner-side
+defensive copies prevent policies and operators from mutating live state.
 
-<p align="center">
-<a href=""><img src="assets/AFLOW-performance.jpg" alt="Performance Of AFlow" title="Performance of AFlow<sub>1</sub>" width="80%"></a>
-</p>
+## Implemented Components
 
-## Framework Components
+| Area | Current implementation |
+|---|---|
+| State/action contracts | `AgentState`, `MacroAction`, `OperatorResult`, `VerifierResult` |
+| Policies | `RandomPolicy`, `RuleBasedPolicy`, `ScriptedPolicy`, `ReplayPolicy` |
+| Execution | `OperatorRegistry`, `HierarchicalRolloutRunner`, Stop handling |
+| Budgets | High-level steps, operator calls, simulated tokens, accumulated cost |
+| Feedback | `ProgressVerifier`, deterministic verifier hooks, sparse/shaped rewards |
+| Trajectories | Stable JSONL schema, dataclass/enum serialization, round trip |
+| Credit | Terminal broadcast, discounted return, progress delta |
+| Compatibility | Adapters for legacy AFlow async Operators and Workflows |
+| Future training | Explicit `PolicyOptimizer` interface; no fake trainer implementation |
 
-- **Node**: Basic unit of LLM invocation. See `metagpt_core/action_nodes/action_node.py` for a flexible interface to control LLM, temperature, format, and prompt.
-- **Operator**: Predefined combinations of Nodes to enhance search efficiency. Encapsulates common operations like Generate, Format, Review, Revise, Ensemble, Test, and Programmer. See `operator.py` for details. You can customize your own Operator by referencing the implementations in this code.
-- **Workflow**: A sequence of LLM-invoking nodes connected by edges. Can be represented as graphs, neural networks, or code to express various execution structures. See `workflow.py` for our implementation.
-- **Optimizer**: Uses LLMs within a Monte Carlo Tree Search variant to explore and refine workflows. Iteratively selects, expands, evaluates, and updates workflows based on performance. See `optimizer.py` for details.
-- **Evaluator**: Assesses workflow performance on given tasks. Provides feedback to guide the optimization process towards more effective workflows. See `evaluator.py` for details.
-
-<p align="center">
-<a href=""><img src="assets/AFLOW-method.jpg" alt="Framework of AFlow" title="Framework of AFlow <sub>1</sub>" width="80%"></a>
-</p>
-
-## Datasets
-
-### Experimental Datasets
-We conducted experiments on six datasets (HumanEval, MBPP, GSM8K, MATH, HotpotQA, DROP) and provide their evaluation code. The data can be found in this [datasets](https://drive.google.com/uc?export=download&id=1DNoegtZiUhWtvkd2xoIuElmIi4ah7k8e) link, or you can download them using `metagpt/ext/aflow/data/download_data.py`
-
-<p align="center">
-<a href=""><img src="assets/AFLOW-experiment.jpg" alt="Performance Of AFlow" title="Performance Of AFlow <sub>1</sub>" width="80%"></a>
-</p>
-
-### Custom Datasets
-For custom tasks, you can reference the code in the `benchmark` folder. Inherit the `BaseBenchmark` class and implement `evaluate_problem`, `calculate_score`, and `get_result_columns` to add your custom dataset benchmark. Then, add your benchmark name in `evaluator.py` and `optimizer.py` to find effective workflows for your custom dataset.
+`CounterfactualCreditAssigner` is intentionally an unimplemented interface. A
+correct implementation requires alternative rollouts, cached execution, or a
+learned value model.
 
 ## Quick Start
 
-1. Set up the Python environment:
-   ```bash
-   # Create and activate a Python 3.9 virtual environment
-   conda create -n <your_env_name> python=3.9
+Run the deterministic mock experiment from the repository root:
 
-   # Install dependencies
-   pip install -r requirements.txt
-   ```
+```bash
+python -m agentic_rl.examples.run_mock_rollout \
+  --policy rule \
+  --credit-method progress_delta \
+  --seed 42 \
+  --output runs/mock.jsonl
+```
 
-2. Configure optimization parameters:
-   - Use command line arguments or modify default parameters in `run.py`:
-     ```python
-     --dataset              # (Required) Dataset type (HumanEval/MBPP/GSM8K/MATH/HotpotQA/DROP)
-     --sample 4             # Sample count - number of workflows to be resampled
-     --optimized_path PATH  # Optimized result save path
-     --initial_round 1      # Initial round
-     --max_rounds 20        # Max iteration rounds for AFLOW
-     --check_convergence    # Whether to enable early stop
-     --validation_rounds 5  # Validation rounds for AFLOW
-     --if_force_download    # Force dataset download if set to True
-     ```
+Expected summary:
 
-3. Configure LLM parameters in `config/config2.yaml` (see `config/config2.example.yaml` for reference)
+```json
+{"final_reward": 1.0, "policy": "rule_based", "steps": 5, "termination_reason": "success"}
+```
 
-4. Set up operators in `run.py` and in `operator.py`, `optimized_path/template/operator.json`. You can reference our implementation to add operators for specific datasets
+The successful rule-based sequence is:
 
-5. For first-time use, download datasets and initial rounds by setting `download(["datasets"])` in `run.py`
+```text
+Plan → Generate → Review → Revise → Test
+```
 
-6. (Optional) Add your custom dataset and corresponding evaluation function following the [Custom Datasets](#custom-datasets) section
+The default mock path uses only the Python standard library. This stricter
+check also works:
 
-7. (Optional) If you want to use a portion of the validation data, you can set `va_list` in `evaluator.py`
+```bash
+python -S -m agentic_rl.examples.run_mock_rollout \
+  --policy rule \
+  --credit-method discounted_return \
+  --seed 42 \
+  --output /tmp/rs-af-stdlib.jsonl
+```
 
-8. Run the optimization:
-   ```bash
-   # Using default parameters
-   python run.py --dataset MATH
-   
-   # Or with custom parameters
-   python run.py --dataset MATH --sample n --optimized_path xxx ...
-   ```
+Use the example YAML configuration when PyYAML is installed:
 
-## Reproduce the Results in the Paper
-1. We provide the raw data obtained from our experiments in this [link](https://drive.google.com/uc?export=download&id=1Sr5wjgKf3bN8OC7G6cO3ynzJqD4w6_Dv), including the workflows and prompts generated in each iteration, as well as their trajectories on the validation dataset. We also provide the optimal workflow for each dataset and the corresponding data on the test dataset. You can download these data using `data/download_data.py`. 
-2. You can directly reproduce our experimental results by use different `ExperimentConfig` of `run.py`.
+```bash
+python -m agentic_rl.examples.run_mock_rollout \
+  --config config/hierarchical_mock.example.yaml
+```
+
+## Tests
+
+The research scaffold uses standard-library `unittest`:
+
+```bash
+python -m unittest discover -s tests -v
+python -m compileall -q agentic_rl tests
+```
+
+Coverage includes serialization, registry errors, budget exhaustion, policy
+legality and reproducibility, Stop, max-step termination, executor/verifier
+exceptions, state-mutation isolation, JSONL round trips, all three credit
+baselines, legacy AFlow adapters, and end-to-end CPU smoke tests.
+
+In the deterministic 20-seed comparison used by the tests, RuleBasedPolicy
+finishes 20/20 tasks while RandomPolicy finishes 0/20.
+
+## Trajectory Data
+
+Each normal JSONL row records one high-level decision:
+
+- schema, run, task, policy, and step identifiers;
+- summarized previous state and available actions;
+- selected macro action and operator observation;
+- verifier score, progress, pass/fail result, and feedback;
+- step reward, final reward, assigned credit, and cost;
+- termination reason and structured metadata.
+
+The serializer filters common hidden-reasoning fields. Raw chain-of-thought is
+not required or persisted. A rollout that terminates before its first decision
+uses a `trajectory_summary` record instead of inventing a fake action.
+
+An example trajectory is available at [`runs/mock.jsonl`](runs/mock.jsonl).
+
+## Project Layout
+
+```text
+agentic_rl/
+  core.py          # state/action/result contracts
+  policies.py      # high-level policy baselines
+  operators.py     # operator registry
+  budget.py        # unified budget accounting
+  rollout.py       # dynamic hierarchical rollout runner
+  trajectory.py    # transition schema and JSONL persistence
+  verifiers.py     # verifier interfaces and CPU baselines
+  rewards.py       # reward interfaces
+  credit.py        # credit-assignment baselines
+  adapters.py      # legacy AFlow compatibility
+  mock.py          # deterministic mock environment
+  optimization.py  # future policy optimizer contract
+  examples/        # runnable CPU examples
+tests/             # unit and smoke tests
+docs/              # detailed architecture guide
+scripts/           # original AFlow implementation
+benchmarks/        # original AFlow evaluation code
+workspace/         # original generated workflow baselines
+```
+
+See [`docs/hierarchical_policy_optimization.md`](docs/hierarchical_policy_optimization.md)
+for detailed data flow, extension instructions, and research limitations.
+
+## Extending RS-AF
+
+### Add an operator
+
+Implement:
+
+```python
+execute(state: AgentState, action: MacroAction) -> OperatorResult
+```
+
+Then register it with `OperatorRegistry`. Return public state changes through
+`OperatorResult.metadata["state_updates"]`; do not mutate the input state.
+
+### Add a policy
+
+Implement:
+
+```python
+select_action(state: AgentState, available_actions: list[str]) -> MacroAction
+```
+
+The same interface can support a deterministic controller, an LLM controller,
+or a future trainable controller.
+
+### Add a credit assigner
+
+Implement:
+
+```python
+assign(trajectory: Trajectory) -> list[float]
+```
+
+The result must contain exactly one credit value per high-level decision.
+
+## Relationship to AFlow
+
+RS-AF preserves the original AFlow implementation as a baseline. AFlow searches
+over code-represented workflows using historical score-based resampling, LLM
+workflow mutation, evaluation, and experience records. RS-AF adds a separate
+within-task controller that dynamically selects operators and records
+step-level trajectories.
+
+Legacy AFlow experiments still require their original dependencies, datasets,
+LLM configuration, and external API access. These are not required for the
+RS-AF CPU mock path.
 
 ## Roadmap
 
-- Support multiple search algorithms
-- Support multi model search in workflow
-- Support LeaderBoard
-- Support more benchmarks
-- Support multimodality tasks
+1. Connect one frozen real LLM executor through the adapter layer.
+2. Collect paired trajectories under fixed tasks, budgets, seeds, and executor
+   versions.
+3. Compare terminal broadcast, discounted return, and progress-delta credit.
+4. Add cached alternative-action rollouts for counterfactual experiments.
+5. Introduce a small trainable high-level controller, optionally with LoRA.
+6. Implement and evaluate PPO/GRPO only after credit semantics are validated.
+7. Add policy versioning, trajectory datasets, and distributed rollout later.
 
-## Citation
+## Current Limitations
 
-If you use AFlow in your research, please cite our paper:
+- The default runner is synchronous.
+- Mock token and cost values are deterministic placeholders.
+- The rule-based policy is a baseline, not a learned policy.
+- There is no value model, counterfactual estimator, GPU trainer, vLLM runtime,
+  or distributed rollout system yet.
+- A JSONL file currently represents one rollout.
 
-```
+## Acknowledgement and Citation
+
+RS-AF is built on the open-source
+[AFlow](https://github.com/FoundationAgents/AFlow) codebase. If you use the
+inherited AFlow implementation or build on its workflow-search ideas, cite:
+
+```bibtex
 @inproceedings{
-   zhang2025aflow,
-   title={{AF}low: Automating Agentic Workflow Generation},
-   author={Jiayi Zhang and Jinyu Xiang and Zhaoyang Yu and Fengwei Teng and Xiong-Hui Chen and Jiaqi Chen and Mingchen Zhuge and Xin Cheng and Sirui Hong and Jinlin Wang and Bingnan Zheng and Bang Liu and Yuyu Luo and Chenglin Wu},
-   booktitle={The Thirteenth International Conference on Learning Representations},
-   year={2025},
-   url={https://openreview.net/forum?id=z5uVAKwmjf}
+  zhang2025aflow,
+  title={{AF}low: Automating Agentic Workflow Generation},
+  author={Jiayi Zhang and Jinyu Xiang and Zhaoyang Yu and Fengwei Teng and Xiong-Hui Chen and Jiaqi Chen and Mingchen Zhuge and Xin Cheng and Sirui Hong and Jinlin Wang and Bingnan Zheng and Bang Liu and Yuyu Luo and Chenglin Wu},
+  booktitle={The Thirteenth International Conference on Learning Representations},
+  year={2025},
+  url={https://openreview.net/forum?id=z5uVAKwmjf}
 }
 ```
+
+The inherited AFlow license remains in [`LICENSE`](LICENSE).
